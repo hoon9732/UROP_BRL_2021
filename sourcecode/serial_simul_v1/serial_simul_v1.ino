@@ -14,114 +14,27 @@
   #define Z_STEP_HIGH        PORTD |=  0b00010000;         //핀 4 HIGH로 지정
   #define Z_STEP_LOW         PORTD &= ~0b00010000;         //핀 4 LOW로 지정
 
-  //홈 위치 지정
-  int POS_HOME[3] = {1167, 950, 1130};
+  //타이머 설정
+  #define TIMER1_INTERRUPTS_ON    TIMSK1 |=  (1 << OCIE1A);
+  #define TIMER1_INTERRUPTS_OFF   TIMSK1 &= ~(1 << OCIE1A);
 
-  //상태를 의미하는 구조체. 현재(cur), 이전값(pre), 차이(err)
-  typedef struct {
-    int cur;
-    int pre;
-    int err;
-  } states;
+  //홈 위치 지정
+  #define POS_HOME_X 1167
+  #define POS_HOME_X 950
+  #define POS_HOME_X 1130
 
   //핀 번호 모음
-  int dir[NUM_MOTOR] = {2, 3, 4};
-  int step[NUM_MOTOR] = {5, 6, 7};
-  int sensor[NUM_MOTOR]= {9, 10, 11};
+  #define dirPin_X 2
+  #define dirPin_Y 3
+  #define dirPin_Z 4
+  #define stepPin_X 5
+  #define stepPin_Y 6
+  #define stepPin_Z 7
+  #define sensorPin_X 9
+  #define sensorPin_Y 10
+  #define sensorPin_Z 11
 
-  //스텝모터를 표현하는 구조체. 방향핀(dirPin), 스텝핀(stepPin), 호밍센서(sensor), 스텝정보(steps. 현재, 이전, 오차)
-  typedef struct {
-    //고정상수값
-    float acceleration; //가속도값(클수록 증가)
-    volatile unsigned long minstepDiff; //최대속도 결정(작을수록 빠름)
-    void(*dirFunc)(int);
-    void(*stepFunc)();
-
-    //계산상수값
-    unsigned int v0; //초기속도delay값(클수록 감소)
-    long stepPos;              // current position of stepper (total of all movements taken so far)
-
-    // per movement variables (only changed once per movement)
-    volatile int dir;                        // current direction of movement, used to keep track of position
-    volatile unsigned int totalStep;        // number of steps requested for current movement
-    volatile bool movementDone = false;      // true if the current movement has been completed (used by main program to wait for completion)
-    volatile unsigned int rampUpStepCount;   // number of steps taken to reach either max speed, or half-way to the goal (will be zero until this number is known)
-    volatile unsigned long estStepsToSpeed;  // estimated steps required to reach max speed
-    volatile unsigned long estTimeForMove;   // estimated time (interrupt ticks) required to complete movement
-    volatile unsigned long rampUpStepTime;
-    volatile float speedScale;               // used to slow down this motor to make coordinated movement with other motors
-
-    // per iteration variables (potentially changed every interrupt)
-    volatile unsigned int n;                 // index in acceleration curve, used to calculate next interval
-    volatile float d;                        // current interval length
-    volatile unsigned long di;               // above variable truncated
-    volatile unsigned int stepCount;         // number of steps completed in current movement
-    int dirPin;
-    int stepPin;
-    int sensor;
-    states steps;
-    //모터의 경우 cur은 목적 위치, pre는 현재 위치, err는 목적위치로 가기위한 스텝 수를 의미
-  } stepMotor;
-
-  //err 값 설정
-  int err[3] = {0, 0, 0};
-
-  //스텝모터 핀 및 홈 위치 설정
-  stepMotor motor[NUM_MOTOR] = {
-    dir[0], step[0], sensor[0],
-    { -POS_HOME[0], -POS_HOME[0], 0},
-    dir[1], step[1], sensor[1],
-    { -POS_HOME[1], -POS_HOME[1], 0},
-    dir[2], step[2], sensor[2],
-    { POS_HOME[2], POS_HOME[2], 0}
-  };
-
-  //모드 초기화
-  states state = {MODE_HOME, MODE_HOME, MODE_HOME};
-
-  //Inverse Kinematics 판별 후 좌표 입력 함수
-  bool isDataexist();
-  bool coordrange();
-  void coordprint();
-  void homefunction();
-
-  //호밍 함수
-  bool homestart = false;
-  bool homeend = false;
-
-  //좌표 입력여부 판별
-  bool xreceived = false;
-  bool yreceived = false;
-  bool zreceived = false;
-
-  //입력값을 범위에 맞추어 변환하는 함수
-  float mapping(float x, float minFrom, float maxFrom, float minTo, float maxTo);
-  //라디안-각도, 각도-라디안 변환 함수
-  float deg2rad(float a);
-  float rad2deg(float a);
-  //계산된 각도를 스텝모터의 스텝 수로 계산하는 함수
-  int angle2step(float deg);
-  //Inverse Kinematics를 계산하는 함수
-  bool getDegree_byFunction(float x, float y, float z, float* deg1, float* deg2, float* deg3);
-
-  //초기값 지정함수
-  void stepX() {
-    X_STEP_HIGH
-    X_STEP_LOW
-  }
-  void dirX(int dir)
-
-  void stepY() {
-    Y_STEP_HIGH
-    Y_STEP_LOW
-  }
-
-  void stepZ() {
-    Z_STEP_HIGH
-    Z_STEP_LOW
-  }
-
-  ///좌표변수
+  //좌표변수
   int posX = 0;
   int posY = 0;
   int posZ = 46;
@@ -144,31 +57,323 @@
   int maxZ = 58;
   int minZ = 34;
 
+  //스텝모터를 표현하는 구조체(*모든 정보를 통합)
+  struct stepperInfo {
+    //고정된 상수값
+    float acceleration; //가속도값(클수록 증가)
+    volatile unsigned long minStepInterval; //최대속도 결정(작을수록 빠름)
+    bool homing; //현재호밍상태
+    bool moving; //현재동작상태
+    void(*dirFunc)(int); //모터의 방향함수(아래에 정의됨)
+    void(*stepFunc)(); //모터의 스텝펄스함수(아래에 정의됨)
+    void(*homeFunc)(int); //모터의 호밍함수(아래에 정의됨)
+
+    //계산되는 상수값
+    unsigned int v0; //초기속도delay값(클수록 감소)
+    long stepPos; //  현재 스텝위치
+
+    //이동에 따라 변하는 변수값
+    volatile int dir;                        //현재 동작방향
+    volatile unsigned int totalSteps;        //현재 요청된 이동스텝수
+    volatile bool movementDone = false;      //동작완료여부
+    volatile unsigned int rampUpStepCount;   //최대 속도 or 중간 지점까지의 스텝수 계산값 초기화
+    volatile unsigned long estStepsToSpeed;  //최대 속도까지의 스텝
+    volatile unsigned long estTimeForMove;   //최대 속도까지의 시간
+    volatile unsigned long rampUpStepTime;
+    volatile float speedScale;               //속도 동기화를 위해 속도에 곱해지는 값
+
+    // per iteration variables (potentially changed every interrupt)
+    volatile unsigned int n;                 //가속도 관련 카운터
+    volatile float d;                        //가속도 관련 간격 초기화
+    volatile unsigned long di;               //n과 d의 계산값 초기화
+    volatile unsigned int stepCount;         //현재 스텝수
+  }
+
+  //Inverse Kinematics 판별 후 좌표 입력 함수
+  bool isDataexist();
+  bool coordrange();
+  void coordprint();
+  void homefunction();
+
+
+  //좌표 입력여부 판별
+  bool xreceived = false;
+  bool yreceived = false;
+  bool zreceived = false;
+
+  //입력값을 범위에 맞추어 변환하는 함수
+  float mapping(float x, float minFrom, float maxFrom, float minTo, float maxTo);
+  //라디안-각도, 각도-라디안 변환 함수
+  float deg2rad(float a);
+  float rad2deg(float a);
+  //계산된 각도를 스텝모터의 스텝 수로 계산하는 함수
+  int angle2step(float deg);
+  //Inverse Kinematics를 계산하는 함수
+  bool getDegree_byFunction(float x, float y, float z, float* deg1, float* deg2, float* deg3);
+
+  //초기값 지정함수
+  void stepX() {
+    X_STEP_HIGH
+    X_STEP_LOW
+  }
+
+  void dirX(int dir) {
+    digitalWrite(dirPin_X, dir); //방향표기 중요
+  }
+
+  void stepY() {
+    Y_STEP_HIGH
+    Y_STEP_LOW
+  }
+
+  void dirY(int dir){
+    digitalWrite(dirPin_Y, dir); //방향표기 중요
+  }
+
+  void stepZ() {
+    Z_STEP_HIGH
+    Z_STEP_LOW
+  }
+
+  void dirZ(int dir){
+    digitalWrite(dirPin_Z, dir); //방향표기 중요
+  }
+
+  //스텝모터 구조체 초기화용 함수
+  void resetStepperInfo( stepperInfo& si ) {
+  si.n = 0; //가속도 관련 카운터 초기화
+  si.d = 0; //가속도 관련 간격 초기화
+  si.di = 0; //n과 d의 계산값 초기화
+  si.stepCount = 0; //현재 스텝수 초기화
+  si.rampUpStepCount = 0; //최대 속도 or 중간 지점까지의 스텝수 계산값 초기화
+  si.rampUpStepTime = 0; //위의 값을 스텝이 아닌 시간으로 계산(*현재 미사용)하여 초기화
+  si.totalSteps = 0; //현재 요청된 이동스텝수 초기화
+  si.stepPos = 0; //현재 스텝위치 초기화
+  si.movementDone = false; //동작완료여부 초기화
+  }
+
+  //모터 3개에 대한 구조체
+  volatile stepperInfo steppers[NUM_MOTOR];
+
   void setup() {
-    //시리얼 통신 설정
-    Serial.begin(9600);
-    for (int i = 0; i < NUM_MOTOR; i++)
-    {
-      pinMode(motor[i].dirPin, OUTPUT);
-      pinMode(motor[i].stepPin, OUTPUT);
-      pinMode(motor[i].sensor, INPUT);
-      motor[i].steps.dirFunc = 
+    pinMode(stepPin_X, OUTPUT);
+    pinMode(dirPin_X, OUTPUT);
+    pinMode(sensorPin_X, INPUT);
+
+    pinMode(stepPin_Y, OUTPUT);
+    pinMode(dirPin_Y, OUTPUT);
+    pinMode(sensorPin_Y, INPUT);
+
+    pinMode(stepPin_Z, OUTPUT);
+    pinMode(dirPin_Z, OUTPUT);
+    pinMode(sensorPin_Z, INPUT);
+
+    digitalWrite(sensorPin_X, LOW);
+    digitalWrite(sensorPin_Y, LOW);
+    digitalWrite(sensorPin_Z, LOW);
+
+    noInterrupts();
+    TCCR1A = 0;
+    TCCR1B = 0;
+    TCNT1  = 0;
+
+    OCR1A = 1000;                             // compare value
+    TCCR1B |= (1 << WGM12);                   // CTC mode
+    TCCR1B |= ((1 << CS11) | (1 << CS10));    // 64 prescaler
+    interrupts();
+
+    steppers[0].dirFunc = dirX;
+    steppers[0].stepFunc = stepX;
+    steppers[0].acceleration = 1000;
+    steppers[0].minStepInterval = 50;
+
+    steppers[1].dirFunc = dirY;
+    steppers[1].stepFunc = stepY;
+    steppers[1].acceleration = 1000;
+    steppers[1].minStepInterval = 50;
+
+    steppers[2].dirFunc = dirZ;
+    steppers[2].stepFunc = stepZ;
+    steppers[2].acceleration = 1000;
+    steppers[2].minStepInterval = 50;
+  }
+
+  void resetStepper(volatile stepperInfo& si) {
+    si.v0 = si.acceleration;
+    si.d = si.v0;
+    si.di = si.d;
+    si.stepCount = 0;
+    si.n = 0;
+    si.rampUpStepCount = 0;
+    si.movementDone = false;
+    si.speedScale = 1;
+
+    si.moving = false;
+    si.homing = false;
+
+    float a = si.minStepInterval / (float)si.v0;
+    a *= 0.676;
+
+    float m = ((a*a - 1) / (-2 * a));
+    float n = m * m;
+
+    si.estStepsToSpeed = n;
+  }
+
+  volatile byte remainingSteppersFlag = 0;
+
+  float getDurationOfAcceleration(volatile stepperInfo& s, unsigned int numSteps) {
+    float d = s.v0;
+    float totalDuration = 0;
+    for (unsigned int n = 1; n < numSteps; n++) {
+      d = d - (2 * d) / (4 * n + 1);
+      totalDuration += d;
     }
-    pinMode(SW1, INPUT_PULLUP);
-    pinMode(SW2, INPUT_PULLUP);
-    pinMode(SW3, INPUT_PULLUP);
-    pinMode(SW4, INPUT_PULLUP);
-    pinMode(SW5, INPUT_PULLUP);
-    pinMode(SW6, INPUT_PULLUP);
-    pinMode(SWH, INPUT_PULLUP);
+    return totalDuration;
+  }
+
+  void prepareMovement(int whichMotor, long steps) {
+    volatile stepperInfo& si = steppers[whichMotor];
+    si.dirFunc( steps < 0 ? HIGH : LOW );
+    si.dir = steps > 0 ? 1 : -1;
+    si.totalSteps = abs(steps);
+    resetStepper(si);
+    
+    remainingSteppersFlag |= (1 << whichMotor);
+
+    unsigned long stepsAbs = abs(steps);
+
+    if ( (2 * si.estStepsToSpeed) < stepsAbs ) {
+      // there will be a period of time at full speed
+      unsigned long stepsAtFullSpeed = stepsAbs - 2 * si.estStepsToSpeed;
+      float accelDecelTime = getDurationOfAcceleration(si, si.estStepsToSpeed);
+      si.estTimeForMove = 2 * accelDecelTime + stepsAtFullSpeed * si.minStepInterval;
+    }
+    else {
+      // will not reach full speed before needing to slow down again
+      float accelDecelTime = getDurationOfAcceleration( si, stepsAbs / 2 );
+      si.estTimeForMove = 2 * accelDecelTime;
+    }
+  }
+
+  volatile byte nextStepperFlag = 0;
+
+  void setNextInterruptInterval() {
+
+    bool movementComplete = true;
+
+    unsigned long mind = 999999;
+    for (int i = 0; i < NUM_MOTOR; i++) {
+      if ( ((1 << i) & remainingSteppersFlag) && steppers[i].di < mind ) {
+        mind = steppers[i].di;
+      }
+    }
+
+    nextStepperFlag = 0;
+    for (int i = 0; i < NUM_MOTOR; i++) {
+      if ( ! steppers[i].movementDone )
+        movementComplete = false;
+      if ( ((1 << i) & remainingSteppersFlag) && steppers[i].di == mind )
+        nextStepperFlag |= (1 << i);
+    }
+
+    if ( remainingSteppersFlag == 0 ) {
+      TIMER1_INTERRUPTS_OFF
+      OCR1A = 65500;
+    }
+
+    OCR1A = mind;
+  }
+
+  ISR(TIMER1_COMPA_vect)
+  {
+    unsigned int tmpCtr = OCR1A;
+
+    OCR1A = 65500;
+
+    for (int i = 0; i < NUM_STEPPERS; i++) {
+
+      if ( ! ((1 << i) & remainingSteppersFlag) )
+        continue;
+
+      if ( ! (nextStepperFlag & (1 << i)) ) {
+        steppers[i].di -= tmpCtr;
+        continue;
+      }
+
+      volatile stepperInfo& s = steppers[i];
+
+      if ( s.stepCount < s.totalSteps ) {
+        s.stepFunc();
+        s.stepCount++;
+        s.stepPosition += s.dir;
+        if ( s.stepCount >= s.totalSteps ) {
+          s.movementDone = true;
+          remainingSteppersFlag &= ~(1 << i);
+        }
+      }
+
+      if ( s.rampUpStepCount == 0 ) {
+        s.n++;
+        s.d = s.d - (2 * s.d) / (4 * s.n + 1);
+        if ( s.d <= s.minStepInterval ) {
+          s.d = s.minStepInterval;
+          s.rampUpStepCount = s.stepCount;
+        }
+        if ( s.stepCount >= s.totalSteps / 2 ) {
+          s.rampUpStepCount = s.stepCount;
+        }
+        s.rampUpStepTime += s.d;
+      }
+      else if ( s.stepCount >= s.totalSteps - s.rampUpStepCount ) {
+        s.d = (s.d * (4 * s.n + 1)) / (4 * s.n + 1 - 2);
+        s.n--;
+      }
+
+      s.di = s.d * s.speedScale; // integer
+    }
+
+    setNextInterruptInterval();
+
+    TCNT1  = 0;
+  }
+
+  void runAndWait() {
+    adjustSpeedScales();
+    setNextInterruptInterval();
+    TIMER1_INTERRUPTS_ON
+    while ( remainingSteppersFlag );
+    remainingSteppersFlag = 0;
+    nextStepperFlag = 0;
+  }
+
+  void adjustSpeedScales() {
+    float maxTime = 0;
+    
+    for (int i = 0; i < NUM_MOTOR; i++) {
+      if ( ! ((1 << i) & remainingSteppersFlag) )
+        continue;
+      if ( steppers[i].estTimeForMove > maxTime )
+        maxTime = steppers[i].estTimeForMove;
+    }
+
+    if ( maxTime != 0 ) {
+      for (int i = 0; i < NUM_MOTOR; i++) {
+        if ( ! ( (1 << i) & remainingSteppersFlag) )
+          continue;
+        steppers[i].speedScale = maxTime / steppers[i].estTimeForMove;
+      }
+    }
   }
 
   void loop() {
+
     while(!Serial.available())
     {
       Serial.println("Enter h to start homing.");
       delay(3000);
     }
+
     //동작을 시작
     while(Serial.available())
     { 
@@ -196,6 +401,19 @@
         Serial.flush();
         delay(500);
       }
+
+    for (int i = 0; i < NUM_STEPPERS; i++) {
+      prepareMovement( i, 800 );
+      runAndWait();
+    }
+
+    prepareMovement( 0, 8000 );
+    prepareMovement( 1,  800 );
+    prepareMovement( 2, 2400 );
+
+    runAndWait();
+    
+    
 
       Serial.println("Enter c to input coordinates.");
       while(!state.pre)
