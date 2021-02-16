@@ -1,4 +1,4 @@
-// For RAMPS 1.4
+//핀번호 정의
 #define X_DIR_PIN          5
 #define X_STEP_PIN         2
 #define X_ENABLE_PIN       8
@@ -23,18 +23,18 @@
 #define TIMER1_INTERRUPTS_OFF   TIMSK1 &= ~(1 << OCIE1A);
 
 struct stepperInfo {
-  // externally defined parameters
-  float acceleration;
-  volatile unsigned long minStepInterval; // ie. max speed, smaller is faster
-  void (*dirFunc)(int);
-  void (*stepFunc)();
+  //고정된 상수값
+  float acceleration; //가속도값(클수록 증가)
+  volatile unsigned long minStepInterval; //최대속도 결정(작을수록 빠름)
+  void (*dirFunc)(int); //모터의 방향함수(아래에 정의됨)
+  void (*stepFunc)(); //모터의 스텝펄스함수(아래에 정의됨)
 
-  // derived parameters
-  unsigned int c0;                // step interval for first step, determines acceleration
-  long stepPosition;              // current position of stepper (total of all movements taken so far)
+  //계산되는 상수값
+  unsigned int c0; //초기속도delay값(클수록 감소)
+  long stepPosition; //현재 스텝위치
 
-  // per movement variables (only changed once per movement)
-  volatile int dir;                        // current direction of movement, used to keep track of position
+  //이동시의 변수 (이동할때마다 변화)
+  volatile int dir;                        //현재 이동방향
   volatile unsigned int totalSteps;        // number of steps requested for current movement
   volatile bool movementDone = false;      // true if the current movement has been completed (used by main program to wait for completion)
   volatile unsigned int rampUpStepCount;   // number of steps taken to reach either max speed, or half-way to the goal (will be zero until this number is known)
@@ -43,7 +43,7 @@ struct stepperInfo {
   volatile unsigned long rampUpStepTime;
   volatile float speedScale;               // used to slow down this motor to make coordinated movement with other motors
 
-  // per iteration variables (potentially changed every interrupt)
+  //인테럽트시의 변수 (인테럽트마다 변화)
   volatile unsigned int n;                 // index in acceleration curve, used to calculate next interval
   volatile float d;                        // current interval length
   volatile unsigned long di;               // above variable truncated
@@ -307,26 +307,21 @@ void loop() {
     runAndWait();
   }
 
-  prepareMovement( 0, 1200 );
-  prepareMovement( 1, 2400 );
-  prepareMovement( 2, 3600 );
+  prepareMovement( 0, 600 );
+  prepareMovement( 1, 500 );
+  prepareMovement( 2, 400 );
   runAndWait();
 
   delay(1000);
 
-  prepareMovement( 0, -1200 );
-  prepareMovement( 1, -2400 );
-  prepareMovement( 2, -3600 );
+  prepareMovement( 0, -600 );
+  prepareMovement( 1, -500 );
+  prepareMovement( 2, -400 );
   runAndWait();
-
+  
+  digitalWrite(X_ENABLE_PIN, HIGH);
+  digitalWrite(Y_ENABLE_PIN, HIGH);
+  digitalWrite(Z_ENABLE_PIN, HIGH);
   while (true);
 
 }
-
-
-
-
-
-
-
-
